@@ -17,6 +17,11 @@ const { service, exclude, title, sub } = Astro.props;
 const cities: City[] = exclude ? CITIES.filter((c) => c.slug !== exclude) : CITIES;
 const heading = title ?? `Serving the ${SITE.region}`;
 const subtitle = sub ?? 'Fast, local garage door service throughout the area, including:';
+
+// EXP-003 rollout (analytics/analysis/ONPAGE-EXPERIMENTS.md): service-qualified city-hub
+// anchors ("Garage Door Repair in Concord") instead of the bare city name, so each hub earns
+// exact-match anchors for "{trade} {city}" queries.
+const tradeLabel = SITE.trade.split(/\s+and\s+/i)[0].replace(/\b\w/g, (m) => m.toUpperCase());
 ---
 <section class="section section-soft" id="service-area">
   <div class="container">
@@ -24,7 +29,7 @@ const subtitle = sub ?? 'Fast, local garage door service throughout the area, in
     <p class="section-sub">{subtitle}</p>
     <ul class="cities">
       {cities.map((c) => (
-        <li><a href={service ? cityServiceUrl(service, c) : cityUrl(c)}>{c.name}</a></li>
+        <li><a href={service ? cityServiceUrl(service, c) : cityUrl(c)}>{service ? `${service.short} in ${c.name}` : `${tradeLabel} in ${c.name}`}</a></li>
       ))}
     </ul>
   </div>
