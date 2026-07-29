@@ -230,8 +230,8 @@ export const SERVICES: Service[] = [
   },
   {
     slug: 'off-track-repair',
-    name: 'Off-Track Garage Door Repair',
-    short: 'Off-Track Repair',
+    name: 'Off-Track Garage Door Realignment',
+    short: 'Off-Track Realignment',
     blurb: 'Realigning rollers and tracks and getting a derailed door moving safely again.',
     description:
       "A door off its track or a bent rail is dangerous to force. We realign rollers, straighten or replace bent track, replace damaged rollers, and get your door rolling smoothly and safely again — often after a car bump, a broken cable, or worn rollers.",
