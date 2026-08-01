@@ -1,3 +1,5 @@
+> **ARCHIVED** — this is the original single-site Bay Area garage-door prototype the factory grew from. Superseded by the [`lead_gen/`](../lead_gen) factory; kept for history. **Do not build new sites from here.**
+
 # Local Lead-Gen Template (Astro)
 
 A static, **SEO-first local lead-generation** site built with [Astro](https://astro.build).
