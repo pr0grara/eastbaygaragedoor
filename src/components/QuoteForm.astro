@@ -11,14 +11,15 @@ const {
   heading = 'Get a Free Quote',
   sub = "Tell us what's going on — we'll call you right back.",
 } = Astro.props;
+
+// Turnstile sitekey — real Managed widget for eastbaygaragedoorrepair.com.
+const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
 ---
 <div class="card">
   <h2>{heading}</h2>
   <p class="card-sub">{sub}</p>
-  <form id="lead-form" novalidate data-endpoint={SITE.formEndpoint}>
-    {SITE.formAccessKey && <input type="hidden" name="access_key" value={SITE.formAccessKey} />}
+  <form id="lead-form" novalidate>
     <input type="hidden" name="source" value={source} />
-    <input type="hidden" name="subject" value={`New lead — ${SITE.company} (${source})`} />
     {/* Honeypot: bots fill this; humans never see it. */}
     <input type="text" name="company_website" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
 
@@ -38,6 +39,9 @@ const {
       <span class="lbl">How can we help?</span>
       <textarea name="message" rows="3" placeholder="e.g. broken spring, door won't open…"></textarea>
     </label>
+
+    <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <div class="cf-turnstile" data-sitekey={TURNSTILE_SITEKEY} data-theme="light" style="margin:12px 0;"></div>
 
     <button type="submit" class="btn btn-primary btn-lg btn-block">Get My Free Quote</button>
     <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
@@ -69,26 +73,24 @@ const {
     if (!EMAIL_RE.test((data.email || '').trim()))
       return setStatus('Please enter a valid email address.', 'error');
   
-    const endpoint = form.getAttribute('data-endpoint');
-    if (!endpoint) {
-      return setStatus('Online form isn’t set up yet — please call us instead.', 'error');
-    }
-
     const btn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
     const orig = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Submitting…';
     try {
-      const res = await fetch(endpoint, {
+      // Send as multipart so the Turnstile token (and any file) ride along.
+      const res = await fetch('/api/lead', {
         method: 'POST',
         headers: { Accept: 'application/json' },
         body: fd,
       });
-      if (!res.ok) throw new Error('bad status');
+      const out = await res.json().catch(() => ({ success: res.ok }));
+      if (!res.ok || !out.success) throw new Error(out.message || 'bad status');
       form.reset();
+      if ((window as any).turnstile) (window as any).turnstile.reset();
       setStatus("🎉 Thanks! We've received your request and will call you shortly.", 'success');
-    } catch {
-      setStatus('Sorry, something went wrong. Please call us instead.', 'error');
+    } catch (err: any) {
+      setStatus(err?.message || 'Sorry, something went wrong. Please call us instead.', 'error');
     } finally {
       btn.disabled = false;
       btn.textContent = orig;
