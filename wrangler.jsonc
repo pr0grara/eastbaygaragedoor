@@ -5,6 +5,7 @@
   // Pure static site: serve the built output directly via Workers Static Assets.
   // No `main` worker script — this is just a CDN for the Astro `dist/` output.
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist",
+    "not_found_handling": "404-page"
   }
 }

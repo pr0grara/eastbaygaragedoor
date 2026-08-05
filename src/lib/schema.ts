@@ -15,11 +15,6 @@ export function localBusiness(siteUrl: string) {
     logo: `${siteUrl.replace(/\/$/, '')}/favicon.svg`,
     priceRange: SITE.priceRange,
     areaServed: CITIES.map((c) => ({ '@type': 'City', name: c.name })),
-    aggregateRating: {
-      '@type': 'AggregateRating',
-      ratingValue: SITE.ratingValue,
-      reviewCount: SITE.reviewCount,
-    },
   };
 }
 
