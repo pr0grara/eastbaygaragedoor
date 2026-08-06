@@ -21,7 +21,7 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
   <form id="lead-form" novalidate>
     <input type="hidden" name="source" value={source} />
     {/* Honeypot: bots fill this; humans never see it. */}
-    <input type="text" name="company_website" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
+    <input type="text" name="company_website" style="display:none" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
 
     <label for="name" class="lbl">
       <span class="lbl">Name *</span>
