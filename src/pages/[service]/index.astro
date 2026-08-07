@@ -21,7 +21,7 @@ export function getStaticPaths() {
 interface Props { service: Service }
 const { service } = Astro.props;
 
-const title = `${service.name} | ${SITE.region} Same-Day Service`;
+const title = service.metaTitle ?? `${service.name} | ${SITE.region} Same-Day Service`;
 const description = `${service.blurb} ${SITE.company} provides ${service.name.toLowerCase()} across the ${SITE.region} — licensed, insured, upfront pricing. Call ${SITE.phoneDisplay}.`;
 const base = Astro.site?.href ?? 'https://example.com/';
 const jsonLd = [
@@ -43,7 +43,7 @@ const heroUrl = await getHeroUrl();
     <div class="hero-overlay"></div>
     <div class="container">
       <div class="hero-copy">
-        <h1>{service.name} in the {SITE.region}</h1>
+        <h1>{service.h1 ?? `${service.name} in the ${SITE.region}`}</h1>
         <p class="lede">{service.blurb}</p>
         <div class="hero-cta">
           <a class="btn btn-call btn-lg" href={tel()}>📞 Call {SITE.phoneDisplay}</a>

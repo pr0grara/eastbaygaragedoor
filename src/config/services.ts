@@ -49,6 +49,10 @@ export interface Service {
   hubOnly?: boolean;
   /** Flagged as an emergency/urgent service (affects copy). */
   emergency?: boolean;
+  /** Optional exact-match <title> override (falls back to the shared template). */
+  metaTitle?: string;
+  /** Optional H1 override (falls back to "{name} in the {region}"). */
+  h1?: string;
 }
 
 export const SERVICES: Service[] = [
@@ -305,9 +309,11 @@ export const SERVICES: Service[] = [
     slug: 'emergency-repair',
     name: 'Emergency Garage Door Repair',
     short: 'Emergency Repair',
+    metaTitle: '24/7 Emergency Garage Door Repair — East Bay | Same-Day Service',
+    h1: 'Emergency Garage Door Repair in the East Bay',
     blurb: 'Urgent help when your door is stuck open, jammed shut, or unsafe — fast response.',
     description:
-      "A garage door that's stuck open leaves your home exposed, and one jammed shut can trap your car when you need to leave. Our emergency service prioritizes urgent calls — broken springs, snapped cables, off-track and storm-damaged doors, and openers that have failed — to get you secured and moving again as fast as possible.",
+      "Broken spring? Door off-track or won't open? A garage door stuck open leaves your home exposed, and one jammed shut can trap your car when you need to leave — both are emergencies that can't wait. We dispatch same-day for urgent East Bay calls, prioritizing broken springs, snapped cables, off-track and storm-damaged doors, and failed openers to get you secured and moving again fast. Don't wait on a callback form — call now and we'll get a technician headed your way.",
     sections: [
       {
         h: 'When to call for emergency service',
