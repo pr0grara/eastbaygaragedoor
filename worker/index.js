@@ -77,15 +77,44 @@ async function handleLead(request, env, ctx) {
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
     return json({ success: false, message: 'Please enter a valid email.' }, 400);
 
+  // --- Spam disposition ---------------------------------------------------
+  // DROP (silent success, store nothing): junk phone + empty message. A real customer never
+  // types a <7-digit phone AND leaves the message blank. Signature of the Aug-2026 bot
+  // ("96"/"1996"/"2029"). Requires a non-empty phone, so a name+email lead is never affected.
+  const phoneDigits = phone.replace(/\D/g, '');
+  if (phone && phoneDigits.length < 7 && !norm(body.message)) return json({ success: true });
+
+  // FLAG (still stored + reviewable in D1 via `data._spam_flag`, but the email alert is
+  // suppressed so the inbox stays clean). Flag — never drop — so nothing debatable is lost.
+  let spamFlag = '';
+  // Foreign country code on a US-only local-service site (e.g. +44). A US expat is remotely
+  // possible, so flag rather than drop.
+  const cleanPhone = phone.replace(/[^\d+]/g, '');
+  if (/^\+(?!1)/.test(cleanPhone)) spamFlag = 'intl-phone';
+  // Duplicate within 15 min (same email or phone on this site) — likely an accidental
+  // double-submit. Flag for review/deletion; do NOT drop (may be an intentional resubmit).
+  if (!spamFlag && env.DB && (email || phone)) {
+    try {
+      const dupSince = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const dup = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM leads WHERE site = ? AND created_at >= ?
+           AND ((email != '' AND email = ?) OR (phone != '' AND phone = ?))`
+      ).bind(siteSlug, dupSince, email, phone).first();
+      if (dup && dup.n > 0) spamFlag = 'duplicate';
+    } catch { /* best-effort; a dup-check failure must never block a real lead */ }
+  }
+
   const now = new Date().toISOString();
   const ua = request.headers.get('User-Agent') || '';
   const source = norm(body.source) || 'website';
 
   if (env.DB) {
     try {
-      const dataJson = JSON.stringify(
-        photo ? { ...body, photo: { name: photo.name, size: photo.size, type: photo.type } } : body
-      );
+      const dataObj = photo
+        ? { ...body, photo: { name: photo.name, size: photo.size, type: photo.type } }
+        : { ...body };
+      if (spamFlag) dataObj._spam_flag = spamFlag;
+      const dataJson = JSON.stringify(dataObj);
       await env.DB.prepare(
         `INSERT INTO leads (created_at, site, name, phone, email, message, source, ip, ua, data)
          VALUES (?,?,?,?,?,?,?,?,?,?)`
@@ -97,7 +126,10 @@ async function handleLead(request, env, ctx) {
     }
   }
 
-  ctx.waitUntil(sendEmail(env, body, { email, source, photo }).catch((e) => console.error('lead email failed:', e)));
+  // Flagged rows (intl-phone / duplicate) are stored for review but don't ping the inbox.
+  if (!spamFlag) {
+    ctx.waitUntil(sendEmail(env, body, { email, source, photo }).catch((e) => console.error('lead email failed:', e)));
+  }
   return json({ success: true });
 }
 
