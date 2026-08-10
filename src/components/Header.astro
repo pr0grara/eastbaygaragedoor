@@ -23,6 +23,15 @@ import { SITE, tel } from '../config/site';
   </div>
 </header>
 
+<style>
+  /* Nav link tap targets: ensure >=44px tall (Apple 44 / Google 48) */
+  .nav-links a:not(.btn) {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+</style>
+
 <script>
   // Close the mobile menu after tapping a link.
   const toggle = document.getElementById('nav-toggle') as HTMLInputElement | null;

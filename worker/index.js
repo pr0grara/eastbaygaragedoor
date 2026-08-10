@@ -53,10 +53,14 @@ async function handleLead(request, env, ctx) {
 
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
 
-  // Turnstile — enforced only when a secret is configured.
+  // Turnstile — verify when configured, but NEVER hard-reject on a missing/failed token
+  // (flaky mobile, blocked 3rd-party JS, expired challenge). Flag instead: the lead is still
+  // stored + reviewable in D1, and only the email alert is suppressed. Honeypot + per-IP
+  // throttle + the junk-phone drop still wall off bot floods.
+  let turnstileFail = false;
   if (env.TURNSTILE_SECRET) {
     const ok = await verifyTurnstile(env.TURNSTILE_SECRET, norm(body['cf-turnstile-response']), ip);
-    if (!ok) return json({ success: false, message: 'Verification failed — please retry.' }, 403);
+    if (!ok) turnstileFail = true;
   }
 
   // Per-IP throttle: max 5 per 10 min (via the same D1).
@@ -86,7 +90,7 @@ async function handleLead(request, env, ctx) {
 
   // FLAG (still stored + reviewable in D1 via `data._spam_flag`, but the email alert is
   // suppressed so the inbox stays clean). Flag — never drop — so nothing debatable is lost.
-  let spamFlag = '';
+  let spamFlag = turnstileFail ? 'turnstile-fail' : '';
   // Foreign country code on a US-only local-service site (e.g. +44). A US expat is remotely
   // possible, so flag rather than drop.
   const cleanPhone = phone.replace(/[^\d+]/g, '');
@@ -127,8 +131,13 @@ async function handleLead(request, env, ctx) {
   }
 
   // Flagged rows (intl-phone / duplicate) are stored for review but don't ping the inbox.
-  if (!spamFlag) {
+  if (!spamFlag || spamFlag === 'turnstile-fail') {
     ctx.waitUntil(sendEmail(env, body, { email, source, photo }).catch((e) => console.error('lead email failed:', e)));
+  }
+  if (!(request.headers.get('Accept') || '').includes('application/json')) {
+    // Native (no-JS) submit — send them back to a real page, not raw JSON.
+    const ref = request.headers.get('Referer');
+    return Response.redirect(ref || new URL('/', request.url).toString(), 303);
   }
   return json({ success: true });
 }

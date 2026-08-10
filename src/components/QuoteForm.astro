@@ -18,7 +18,7 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
 <div class="card">
   <h2>{heading}</h2>
   <p class="card-sub">{sub}</p>
-  <form id="lead-form" novalidate>
+  <form id="lead-form" action="/api/lead" method="post" novalidate>
     <input type="hidden" name="source" value={source} />
     {/* Honeypot: bots fill this; humans never see it. */}
     <input type="text" name="company_website" style="display:none" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
@@ -40,7 +40,6 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
       <textarea name="message" rows="3" placeholder="e.g. broken spring, door won't open…"></textarea>
     </label>
 
-    <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <div class="cf-turnstile" data-sitekey={TURNSTILE_SITEKEY} data-theme="light" style="margin:12px 0;min-height:65px;"></div>
 
     <button type="submit" class="btn btn-primary btn-lg btn-block">Get My Free Quote</button>
@@ -61,6 +60,18 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
     statusEl.textContent = msg;
     statusEl.className = 'form-status' + (type ? ' ' + type : '');
   }
+
+  let tsLoaded = false;
+  function loadTurnstile() {
+    if (tsLoaded) return;
+    tsLoaded = true;
+    const st = document.createElement('script');
+    st.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+    st.async = true;
+    st.defer = true;
+    document.head.appendChild(st);
+  }
+  form?.addEventListener('focusin', loadTurnstile, { once: true });
 
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
