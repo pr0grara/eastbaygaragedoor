@@ -32,8 +32,8 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
       <input type="tel" name="phone" autocomplete="tel" placeholder="(555) 123-4567" />
     </label>
     <label for="email" class="lbl">
-      <span class="lbl">Email *</span>
-      <input type="email" name="email" autocomplete="email" required placeholder="jane@email.com" />
+      <span class="lbl">Email</span>
+      <input type="email" name="email" autocomplete="email" placeholder="jane@email.com" />
     </label>
     <label for="message" class="lbl">
       <span class="lbl">How can we help?</span>
@@ -41,7 +41,7 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
     </label>
 
     <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-    <div class="cf-turnstile" data-sitekey={TURNSTILE_SITEKEY} data-theme="light" style="margin:12px 0;"></div>
+    <div class="cf-turnstile" data-sitekey={TURNSTILE_SITEKEY} data-theme="light" style="margin:12px 0;min-height:65px;"></div>
 
     <button type="submit" class="btn btn-primary btn-lg btn-block">Get My Free Quote</button>
     <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
@@ -70,8 +70,9 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
 
     if (data.company_website) return; // honeypot tripped — silently drop
     if (!data.name || !data.name.trim()) return setStatus('Please enter your name.', 'error');
-    if (!EMAIL_RE.test((data.email || '').trim()))
-      return setStatus('Please enter a valid email address.', 'error');
+    const phoneDigits = (data.phone || '').replace(/\D/g, '');
+    if (phoneDigits.length < 10 && !EMAIL_RE.test((data.email || '').trim()))
+      return setStatus('Please enter a valid phone number or email.', 'error');
   
     const btn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
     const orig = btn.textContent;
