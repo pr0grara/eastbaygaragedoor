@@ -59,7 +59,12 @@ async function handleLead(request, env, ctx) {
   // throttle + the junk-phone drop still wall off bot floods.
   let turnstileFail = false;
   if (env.TURNSTILE_SECRET) {
-    const ok = await verifyTurnstile(env.TURNSTILE_SECRET, norm(body['cf-turnstile-response']), ip);
+    const tsToken = norm(body['cf-turnstile-response']);
+    // No token at all = a bot POSTing straight to /api/lead (the real widget always sends one).
+    // Silently drop like the honeypot — store nothing, email nothing. This is the undo of the
+    // Aug-2026 "graceful degrade" that let a tokenless bot flood reach the inbox.
+    if (!tsToken) return json({ success: true });
+    const ok = await verifyTurnstile(env.TURNSTILE_SECRET, tsToken, ip);
     if (!ok) turnstileFail = true;
   }
 
@@ -131,7 +136,7 @@ async function handleLead(request, env, ctx) {
   }
 
   // Flagged rows (intl-phone / duplicate) are stored for review but don't ping the inbox.
-  if (!spamFlag || spamFlag === 'turnstile-fail') {
+  if (!spamFlag) {
     ctx.waitUntil(sendEmail(env, body, { email, source, photo }).catch((e) => console.error('lead email failed:', e)));
   }
   if (!(request.headers.get('Accept') || '').includes('application/json')) {
