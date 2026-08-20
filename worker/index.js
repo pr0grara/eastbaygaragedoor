@@ -15,6 +15,13 @@ const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
 const norm = (v) => (v == null ? '' : String(v)).trim();
 
+// Web-form lead → text alert. Fires the SAME A2P path the call alerts use: POST a tiny
+// summary to the Twilio Functions `lead-alert` endpoint, which texts Ara. URL + token can be
+// overridden per-site via env (LEAD_ALERT_URL / LEAD_ALERT_SECRET); the fallbacks below are
+// the shared defaults so no per-site wrangler change is needed. Best-effort — never blocks a lead.
+const LEAD_ALERT_URL_DEFAULT = 'https://lead-gen-twilio-6921-dev.twil.io/lead-alert';
+const LEAD_ALERT_SECRET_DEFAULT = '2101d6a685caedff82f5512253143de640e17007f85db891';
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -135,9 +142,10 @@ async function handleLead(request, env, ctx) {
     }
   }
 
-  // Flagged rows (intl-phone / duplicate) are stored for review but don't ping the inbox.
+  // Flagged rows (intl-phone / duplicate) are stored for review but don't ping the inbox/phone.
   if (!spamFlag) {
     ctx.waitUntil(sendEmail(env, body, { email, source, photo }).catch((e) => console.error('lead email failed:', e)));
+    ctx.waitUntil(sendLeadText(env, { name: norm(body.name), phone, email, source }).catch((e) => console.error('lead text failed:', e)));
   }
   if (!(request.headers.get('Accept') || '').includes('application/json')) {
     // Native (no-JS) submit — send them back to a real page, not raw JSON.
@@ -194,4 +202,25 @@ async function sendEmail(env, body, meta) {
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error('Resend ' + res.status);
+}
+
+async function sendLeadText(env, meta) {
+  const url = env.LEAD_ALERT_URL || LEAD_ALERT_URL_DEFAULT;
+  const token = env.LEAD_ALERT_SECRET || LEAD_ALERT_SECRET_DEFAULT;
+  if (!url || !token) return;
+  const form = new URLSearchParams({
+    token,
+    company: env.COMPANY || env.SITE_SLUG || 'lead-gen site',
+    site: env.SITE_SLUG || '',
+    name: meta.name || '',
+    phone: meta.phone || '',
+    email: meta.email || '',
+    source: meta.source || '',
+  });
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form,
+  });
+  if (!res.ok) throw new Error('lead-alert ' + res.status);
 }
