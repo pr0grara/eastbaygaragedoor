@@ -8,6 +8,7 @@
   "main": "worker/index.js",
   "assets": { "directory": "./dist", "binding": "ASSETS", "not_found_handling": "404-page" },
   "d1_databases": [ { "binding": "DB", "database_name": "arabuilds-intake", "database_id": "aa1e362d-1057-4832-82a7-c19517e3214e" } ],
+  "r2_buckets": [ { "binding": "LEAD_FILES", "bucket_name": "arabuilds-lead-files" } ],
   "vars": {
     "SITE_SLUG": "eastbaygaragedoor",
     "COMPANY": "Garage Door Repairs",

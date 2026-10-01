@@ -9,7 +9,9 @@
  *
  * POST /api/lead → honeypot → Turnstile (if configured) → per-IP throttle → store in the
  * central `leads` D1 (arabuilds-intake, attributed by `site`) → best-effort Resend email
- * (optional customer photo delivered as an attachment).
+ * (optional customer photo delivered as an attachment). The photo is ALSO stored in the private
+ * R2 bucket `arabuilds-lead-files` (binding LEAD_FILES) with its key on the lead row
+ * (data.photo.key), so /admin/leads in arabuilds can show it inline.
  */
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
@@ -124,10 +126,23 @@ async function handleLead(request, env, ctx) {
   const ua = request.headers.get('User-Agent') || '';
   const source = norm(body.source) || 'website';
 
+  // Optional photo → private R2 so the arabuilds admin leads view can display it. The key is
+  // stored on the lead row (data.photo.key); the email attachment further down is unchanged.
+  // Best-effort: an upload failure still stores the lead with the photo's metadata.
+  let photoKey = null;
+  if (photo && env.LEAD_FILES && photo.size <= 10 * 1024 * 1024 && (photo.type || '').startsWith('image/')) {
+    try {
+      const safeName = (photo.name || 'photo.jpg').replace(/[^A-Za-z0-9._-]/g, '_').slice(-80) || 'photo.jpg';
+      const key = `${siteSlug}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}/${safeName}`;
+      await env.LEAD_FILES.put(key, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
+      photoKey = key;
+    } catch (e) { console.error('lead photo R2 put failed:', e); }
+  }
+
   if (env.DB) {
     try {
       const dataObj = photo
-        ? { ...body, photo: { name: photo.name, size: photo.size, type: photo.type } }
+        ? { ...body, photo: { name: photo.name, size: photo.size, type: photo.type, key: photoKey } }
         : { ...body };
       if (spamFlag) dataObj._spam_flag = spamFlag;
       const dataJson = JSON.stringify(dataObj);
