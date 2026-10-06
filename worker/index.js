@@ -7,22 +7,29 @@
  * Worker; only POST /api/lead (and true 404s) reach the code below — a bug here can't take
  * the marketing pages down.
  *
- * POST /api/lead → honeypot → Turnstile (if configured) → per-IP throttle → store in the
- * central `leads` D1 (arabuilds-intake, attributed by `site`) → best-effort Resend email
+ * POST /api/lead → honeypot → Turnstile (if configured) → validation + spam flags → photo to R2
+ * → POST to arabuilds /api/lead-intake, which owns the per-IP throttle, the duplicate check and
+ * the write to the central `leads` table (attributed by `site`) → best-effort Resend email
  * (optional customer photo delivered as an attachment). The photo is ALSO stored in the private
  * R2 bucket `arabuilds-lead-files` (binding LEAD_FILES) with its key on the lead row
  * (data.photo.key), so /admin/leads in arabuilds can show it inline.
+ *
+ * Since 2026-10-06 this Worker has NO D1 binding: the intake database also carries the tunnel's
+ * control tables, so only arabuilds writes to it. Secrets: LEAD_INTAKE_SECRET (required to store),
+ * LEAD_ALERT_SECRET (required to text/push), RESEND_API_KEY, TURNSTILE_SECRET — all `wrangler
+ * secret put`, none in code.
  */
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
 const norm = (v) => (v == null ? '' : String(v)).trim();
 
-// Web-form lead → text alert. Fires the SAME A2P path the call alerts use: POST a tiny
-// summary to the Twilio Functions `lead-alert` endpoint, which texts Ara. URL + token can be
-// overridden per-site via env (LEAD_ALERT_URL / LEAD_ALERT_SECRET); the fallbacks below are
-// the shared defaults so no per-site wrangler change is needed. Best-effort — never blocks a lead.
+// Web-form lead → text/push alert. Fires the SAME A2P path the call alerts use: POST a tiny
+// summary to the Twilio Functions `lead-alert` endpoint. The URL may be overridden per-site via
+// LEAD_ALERT_URL; the token is the LEAD_ALERT_SECRET Worker secret (a hardcoded default used to
+// live here and sat in 16 public repos; removed 2026-10-06). Best-effort — never blocks a lead.
 const LEAD_ALERT_URL_DEFAULT = 'https://lead-gen-twilio-6921-dev.twil.io/lead-alert';
-const LEAD_ALERT_SECRET_DEFAULT = '2101d6a685caedff82f5512253143de640e17007f85db891';
+// Where leads are stored: arabuilds owns the write (see header). Overridable via LEAD_INTAKE_URL.
+const LEAD_INTAKE_URL_DEFAULT = 'https://arabuilds.com/api/lead-intake';
 
 export default {
   async fetch(request, env, ctx) {
@@ -62,32 +69,34 @@ async function handleLead(request, env, ctx) {
 
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
 
-  // Turnstile — verify when configured, but NEVER hard-reject on a missing/failed token
-  // (flaky mobile, blocked 3rd-party JS, expired challenge). Flag instead: the lead is still
-  // stored + reviewable in D1, and only the email alert is suppressed. Honeypot + per-IP
-  // throttle + the junk-phone drop still wall off bot floods.
-  let turnstileFail = false;
+  // Turnstile: verify when configured, but never drop a lead over a missing or failed token.
+  // Every outcome is stored; only a verified token fires the email and the text/push alert.
+  // (LEADFIX-2026-10-05)
+  //   verified token                 clean lead, alerts fire.
+  //   token that siteverify rejects  flagged 'turnstile-fail', stored, no alert.
+  //   no token, ts=blocked|unsolved  the form's own JS waited for the check, it never finished
+  //                                  (blocked script, unticked box), and it sent anyway. Almost
+  //                                  always a real person: flagged 'unverified', stored visible
+  //                                  in /admin/leads and counted, no alert.
+  //   no token, no ts marker         a POST that never ran the page (the Aug-2026 bot flood):
+  //                                  flagged 'no-token', stored hidden (spam=1, so it is out of
+  //                                  the leads view and every count), no alert. Kept, not lost.
+  // Until 2026-10-05 a missing token was dropped silently while the page said "Thanks!", which
+  // ate any real lead that tapped Send before the lazily loaded check had finished.
+  let tsFlag = '';
+  let hideRow = 0;
   if (env.TURNSTILE_SECRET) {
     const tsToken = norm(body['cf-turnstile-response']);
-    // No token at all = a bot POSTing straight to /api/lead (the real widget always sends one).
-    // Silently drop like the honeypot — store nothing, email nothing. This is the undo of the
-    // Aug-2026 "graceful degrade" that let a tokenless bot flood reach the inbox.
-    if (!tsToken) return json({ success: true });
-    const ok = await verifyTurnstile(env.TURNSTILE_SECRET, tsToken, ip);
-    if (!ok) turnstileFail = true;
+    if (!tsToken) {
+      if (norm(body.ts)) tsFlag = 'unverified';
+      else { tsFlag = 'no-token'; hideRow = 1; }
+    } else if (!(await verifyTurnstile(env.TURNSTILE_SECRET, tsToken, ip))) {
+      tsFlag = 'turnstile-fail';
+    }
   }
 
-  // Per-IP throttle: max 5 per 10 min (via the same D1).
-  if (env.DB) {
-    try {
-      const since = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-      const row = await env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM leads WHERE ip = ? AND site = ? AND created_at >= ?`
-      ).bind(ip, siteSlug, since).first();
-      if (row && row.n >= 5)
-        return json({ success: false, message: 'Too many submissions — please try again shortly.' }, 429);
-    } catch { /* throttle is best-effort; never block a real lead on it */ }
-  }
+  // Per-IP throttle (max 5 per 10 min per site) now runs inside arabuilds /api/lead-intake, which
+  // answers 429 and we pass that through below.
 
   if (!norm(body.name)) return json({ success: false, message: 'Please add your name.' }, 400);
   const phone = norm(body.phone), email = norm(body.email);
@@ -104,23 +113,13 @@ async function handleLead(request, env, ctx) {
 
   // FLAG (still stored + reviewable in D1 via `data._spam_flag`, but the email alert is
   // suppressed so the inbox stays clean). Flag — never drop — so nothing debatable is lost.
-  let spamFlag = turnstileFail ? 'turnstile-fail' : '';
+  let spamFlag = tsFlag;
   // Foreign country code on a US-only local-service site (e.g. +44). A US expat is remotely
   // possible, so flag rather than drop.
   const cleanPhone = phone.replace(/[^\d+]/g, '');
   if (/^\+(?!1)/.test(cleanPhone)) spamFlag = 'intl-phone';
-  // Duplicate within 15 min (same email or phone on this site) — likely an accidental
-  // double-submit. Flag for review/deletion; do NOT drop (may be an intentional resubmit).
-  if (!spamFlag && env.DB && (email || phone)) {
-    try {
-      const dupSince = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-      const dup = await env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM leads WHERE site = ? AND created_at >= ?
-           AND ((email != '' AND email = ?) OR (phone != '' AND phone = ?))`
-      ).bind(siteSlug, dupSince, email, phone).first();
-      if (dup && dup.n > 0) spamFlag = 'duplicate';
-    } catch { /* best-effort; a dup-check failure must never block a real lead */ }
-  }
+  // Duplicate within 15 min (same email or phone on this site) is flagged by /api/lead-intake,
+  // which returns the final spam_flag; it is never dropped (may be an intentional resubmit).
 
   const now = new Date().toISOString();
   const ua = request.headers.get('User-Agent') || '';
@@ -139,28 +138,46 @@ async function handleLead(request, env, ctx) {
     } catch (e) { console.error('lead photo R2 put failed:', e); }
   }
 
-  if (env.DB) {
-    try {
-      const dataObj = photo
-        ? { ...body, photo: { name: photo.name, size: photo.size, type: photo.type, key: photoKey } }
-        : { ...body };
-      if (spamFlag) dataObj._spam_flag = spamFlag;
-      const dataJson = JSON.stringify(dataObj);
-      await env.DB.prepare(
-        `INSERT INTO leads (created_at, site, name, phone, email, message, source, ip, ua, data)
-         VALUES (?,?,?,?,?,?,?,?,?,?)`
-      ).bind(now, siteSlug, norm(body.name), phone, email, norm(body.message),
-             source, ip, ua, dataJson).run();
-    } catch (e) {
-      // Don't lose the lead on a storage hiccup — the email alert is the safety net.
-      console.error('leads D1 insert failed:', e);
+  // Store via arabuilds. It applies the throttle (429 → passed through), adds the 'duplicate'
+  // flag when it sees one, and writes the row. On any other failure the lead is NOT lost: the
+  // email and the text/push alert below are the safety net, exactly as when the old direct
+  // D1 insert failed.
+  // The form body is public input: a submitter must not be able to plant the review flag or point
+  // the photo key at someone else's object, so those two keys are ours alone.
+  const { _spam_flag: _clientFlag, photo: _clientPhoto, ...fields } = body;
+  const dataObj = photo
+    ? { ...fields, photo: { name: photo.name, size: photo.size, type: photo.type, key: photoKey } }
+    : { ...fields };
+  let storeFailed = false;
+  try {
+    const stored = await storeLead(env, {
+      site: siteSlug, ip, ua, created_at: now,
+      name: norm(body.name), phone, email, message: norm(body.message), source,
+      data: dataObj, spam_flag: spamFlag, hide: hideRow,
+    });
+    if (stored && stored.throttled) {
+      if (photoKey && env.LEAD_FILES) ctx.waitUntil(env.LEAD_FILES.delete(photoKey).catch(() => {}));
+      return json({ success: false, message: 'Too many submissions — please try again shortly.' }, 429);
     }
+    // arabuilds may ESCALATE the flag (it sees duplicates), never clear one we set ourselves.
+    if (!spamFlag && stored && stored.ok && typeof stored.spam_flag === 'string' && stored.spam_flag) spamFlag = stored.spam_flag;
+  } catch (e) {
+    storeFailed = true;
+    console.error(`lead-intake store failed (site=${siteSlug} flag=${spamFlag || 'none'} name=${norm(body.name)}):`, e);
+    // No row exists to point at the photo; the email below still carries it as an attachment.
+    if (photoKey && env.LEAD_FILES) ctx.waitUntil(env.LEAD_FILES.delete(photoKey).catch(() => {}));
   }
 
-  // Flagged rows (intl-phone / duplicate) are stored for review but don't ping the inbox/phone.
+  // Flagged rows (turnstile-fail, unverified, no-token, intl-phone, duplicate) are stored but
+  // don't ping the inbox or the phone.
   if (!spamFlag) {
     ctx.waitUntil(sendEmail(env, body, { email, source, photo }).catch((e) => console.error('lead email failed:', e)));
     ctx.waitUntil(sendLeadText(env, { name: norm(body.name), phone, email, source }).catch((e) => console.error('lead text failed:', e)));
+  } else if (storeFailed) {
+    // A flagged lead normally lives only as a row for review. With no row it would vanish, so the
+    // email (not the text) carries it, marked, until arabuilds is reachable again.
+    ctx.waitUntil(sendEmail(env, body, { email, source, photo, note: `⚠ NOT STORED (arabuilds unreachable) — flagged ${spamFlag}; review by hand.` })
+      .catch((e) => console.error('lead email failed:', e)));
   }
   if (!(request.headers.get('Accept') || '').includes('application/json')) {
     // Native (no-JS) submit — send them back to a real page, not raw JSON.
@@ -168,6 +185,23 @@ async function handleLead(request, env, ctx) {
     return Response.redirect(ref || new URL('/', request.url).toString(), 303);
   }
   return json({ success: true });
+}
+
+// POST the lead to arabuilds /api/lead-intake. Resolves { ok, spam_flag } on 200, { throttled: true }
+// on 429, throws on anything else (the caller logs and falls back to the alerts).
+async function storeLead(env, payload) {
+  const url = env.LEAD_INTAKE_URL || LEAD_INTAKE_URL_DEFAULT;
+  const secret = env.LEAD_INTAKE_SECRET;
+  if (!secret) throw new Error('LEAD_INTAKE_SECRET not set');
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Lead-Intake-Secret': secret },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (res.status === 429) return { ok: false, throttled: true };
+  if (!res.ok) throw new Error('lead-intake ' + res.status);
+  return await res.json();
 }
 
 async function verifyTurnstile(secret, token, ip) {
@@ -188,12 +222,13 @@ async function sendEmail(env, body, meta) {
   const FIELDS = ['name', 'phone', 'email', 'address', 'message', 'source'];
   const lines = [`NEW LEAD — ${company} (${meta.source})`, ''];
   for (const f of FIELDS) { const v = norm(body[f]); if (v) lines.push(`${f}: ${v}`); }
+  if (meta.note) lines.push('', meta.note);
 
   const payload = {
     from: env.ALERT_FROM || `${company} <onboarding@resend.dev>`,
     to: [env.ALERT_TO],
     reply_to: meta.email || undefined,
-    subject: `New lead — ${siteSlug} — ${norm(body.name) || 'unknown'}`,
+    subject: `${meta.note ? '[not stored] ' : ''}New lead — ${siteSlug} — ${norm(body.name) || 'unknown'}`,
   };
 
   // Optional photo → email attachment (best-effort; skip non-images or >10MB).
@@ -221,8 +256,8 @@ async function sendEmail(env, body, meta) {
 
 async function sendLeadText(env, meta) {
   const url = env.LEAD_ALERT_URL || LEAD_ALERT_URL_DEFAULT;
-  const token = env.LEAD_ALERT_SECRET || LEAD_ALERT_SECRET_DEFAULT;
-  if (!url || !token) return;
+  const token = env.LEAD_ALERT_SECRET;
+  if (!url || !token) { console.error('LEAD_ALERT_SECRET not set; lead text/push skipped'); return; }
   const form = new URLSearchParams({
     token,
     company: env.COMPANY || env.SITE_SLUG || 'lead-gen site',

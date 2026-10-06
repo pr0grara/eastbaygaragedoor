@@ -62,6 +62,7 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
   }
 
   let tsLoaded = false;
+  let tsFailed = false; // the Turnstile script itself failed to load (content blocker, network)
   function loadTurnstile() {
     if (tsLoaded) return;
     tsLoaded = true;
@@ -69,9 +70,33 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
     st.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
     st.async = true;
     st.defer = true;
+    st.onerror = () => { tsFailed = true; };
     document.head.appendChild(st);
   }
   form?.addEventListener('focusin', loadTurnstile, { once: true });
+
+  // The spam check's answer, once it has one (Turnstile writes it into this hidden input).
+  function turnstileToken(): string {
+    const el = form?.querySelector('input[name="cf-turnstile-response"]') as HTMLInputElement | null;
+    return (el && el.value) || '';
+  }
+  // Send waits for the spam check instead of racing it (LEADFIX-2026-10-05). Before, a tap that
+  // beat the lazily loaded check posted with no token, and the Worker dropped it while this page
+  // said "Thanks!". Waits up to 12 s (a slow phone, or a tap on the checkbox), then returns ''
+  // so the caller sends anyway, marked, and the Worker keeps it flagged instead of losing it.
+  async function waitForTurnstile(maxMs = 12000): Promise<string> {
+    loadTurnstile();
+    let tok = turnstileToken();
+    if (tok) return tok;
+    setStatus('One moment, checking you\u2019re not a robot. If a box appears above, tap it.', '');
+    const until = Date.now() + maxMs;
+    while (!tok && !tsFailed && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 250));
+      tok = turnstileToken();
+    }
+    setStatus('', '');
+    return tok;
+  }
 
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -90,17 +115,24 @@ const TURNSTILE_SITEKEY = '0x4AAAAAAEGrDx2KR8JNWIIg';
     btn.disabled = true;
     btn.textContent = 'Submitting…';
     try {
-      // Send as multipart so the Turnstile token (and any file) ride along.
+      // Wait for the spam check (see waitForTurnstile), then send as multipart so the token and
+      // any photo ride along. Still no token: send anyway with ts=blocked|unsolved, and the
+      // Worker keeps it flagged 'unverified' rather than dropping it.
+      const token = await waitForTurnstile();
+      const send = new FormData(form);
+      if (!token) send.set('ts', tsFailed || !(window as any).turnstile ? 'blocked' : 'unsolved');
       const res = await fetch('/api/lead', {
         method: 'POST',
         headers: { Accept: 'application/json' },
-        body: fd,
+        body: send,
       });
       const out = await res.json().catch(() => ({ success: res.ok }));
       if (!res.ok || !out.success) throw new Error(out.message || 'bad status');
       form.reset();
       if ((window as any).turnstile) (window as any).turnstile.reset();
-      setStatus("🎉 Thanks! We've received your request and will call you shortly.", 'success');
+      setStatus(token
+        ? "🎉 Thanks! We've received your request and will call you shortly."
+        : "🎉 Thanks! We've received your request. If it's urgent, call us now.", 'success');
     } catch (err: any) {
       setStatus(err?.message || 'Sorry, something went wrong. Please call us instead.', 'error');
     } finally {
