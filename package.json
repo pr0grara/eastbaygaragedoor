@@ -1,7 +1,7 @@
 {
   "name": "eastbay-garage-door",
   "version": "1.0.0",
-  "description": "Static, SEO-first local lead-gen template (Astro). City × service pages from config. Deploys to Cloudflare Pages.",
+  "description": "Static, SEO-first local lead-gen template (Astro). City \u00d7 service pages from config. Deploys to Cloudflare Pages.",
   "type": "module",
   "engines": {
     "node": ">=18.20.8"
@@ -11,7 +11,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "deploy": "astro build && npx wrangler deploy",
-    "astro": "astro"
+    "astro": "astro",
+    "indexnow": "node scripts/indexnow.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.3",
